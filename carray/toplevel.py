@@ -532,9 +532,9 @@ def _eval_blocks(expression, vars, vlen, typesize, kernel, **kwargs):
     nthreads = 1
 
     # Find a proper partition size for T0T0T0...T1T1T1...TNTNTN schema
-    nblocks = (vlen / bsize)
+    nblocks = (vlen // bsize)
     if (nblocks % bsize) > 0: nblocks += 1
-    th_nblocks = nblocks / nthreads
+    th_nblocks = nblocks // nthreads
     if (nblocks % nthreads) > 0: th_nblocks += 1
 
     # Create the threads and do the job
@@ -542,7 +542,6 @@ def _eval_blocks(expression, vars, vlen, typesize, kernel, **kwargs):
         start = tid * th_nblocks * bsize
         stop = (tid+1) * th_nblocks * bsize
         if tid == nthreads-1: stop = vlen
-        #print "start, stop-->", start, stop, bsize
         w = Worker(expression, start, stop, bsize, vars, vars_,
                    kernel, maxndims, **kwargs)
         result = w.run()
