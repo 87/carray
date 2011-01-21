@@ -525,6 +525,9 @@ def _eval_blocks(expression, vars, vlen, typesize, kernel, **kwargs):
     # Threading code starts here...
     ca.set_nthreads(1)
     ca.blosc_set_nthreads(1)
+    # This threading code does not work very well, either for numexpr,
+    # but specially for the python kernel.  Would it be better to try
+    # Python3?  Until then, will only use 1 single thread.
     #nthreads = ca.ncores
     nthreads = 1
 
