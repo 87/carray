@@ -11,9 +11,9 @@
 
 import sys, os
 import itertools as it
+import math, threading
 import numpy as np
 import carray as ca
-import math
 
 if ca.numexpr_here:
     from numexpr.expressions import functions as numexpr_functions
@@ -522,40 +522,88 @@ def _eval_blocks(expression, vars, vlen, typesize, kernel, **kwargs):
             if len(var) > bsize and hasattr(var, "_getrange"):
                 vars_[name] = np.empty(bsize, dtype=var.dtype)
 
-    for i in xrange(0, vlen, bsize):
-        # Get buffers for vars
-        for name in vars.iterkeys():
-            var = vars[name]
-            if hasattr(var, "__len__") and len(var) > bsize:
-                if hasattr(var, "_getrange"):
-                    if i+bsize < vlen:
-                        var._getrange(i, bsize, vars_[name])
-                    else:
-                        vars_[name] = var[i:]
-                else:
-                    vars_[name] = var[i:i+bsize]
-            else:
-                if hasattr(var, "__getitem__"):
-                    vars_[name] = var[:]
-                else:
-                    vars_[name] = var
-        # Perform the evaluation for this block
-        if kernel == "python":
-            res_block = _eval(expression, vars_)
-        else:
-            res_block = ca.numexpr.evaluate(expression, local_dict=vars_)
-        if i == 0:
-            # Detection of reduction operations
-            if len(res_block.shape) < maxndims:
-                raise (NotImplementedError,
-                       "reduction operations are not supported yet")
-            # Get a decent default for expectedlen
-            nrows = kwargs.pop('expectedlen', vlen)
-            result = ca.carray(res_block, expectedlen=nrows, **kwargs)
-        else:
-            result.append(res_block)
+    # Threading code starts here...
+    ca.set_nthreads(1)
+    ca.blosc_set_nthreads(1)
+    #nthreads = ca.ncores
+    nthreads = 1
+
+    # Find a proper partition size for T0T0T0...T1T1T1...TNTNTN schema
+    nblocks = (vlen / bsize)
+    if (nblocks % bsize) > 0: nblocks += 1
+    th_nblocks = nblocks / nthreads
+    if (nblocks % nthreads) > 0: th_nblocks += 1
+
+    # Create the threads and do the job
+    for tid in range(nthreads):
+        start = tid * th_nblocks * bsize
+        stop = (tid+1) * th_nblocks * bsize
+        if tid == nthreads-1: stop = vlen
+        #print "start, stop-->", start, stop, bsize
+        w = Worker(expression, start, stop, bsize, vars, vars_,
+                   kernel, maxndims, **kwargs)
+        result = w.run()
 
     return result
+
+class Worker(threading.Thread):
+    def __init__(self, expression, start, vlen, bsize, _vars, vars_,
+                 kernel, maxndims, **kwargs):
+        self.expression = expression
+        self.start = start
+        self.vlen = vlen
+        self.bsize = bsize
+        self._vars = _vars
+        self.vars_ = vars_
+        self.kernel = kernel
+        self.maxndims = maxndims
+        self.kwargs = kwargs
+
+    def run(self):
+        expression = self.expression
+        start = self.start
+        vlen = self.vlen
+        bsize = self.bsize
+        _vars = self._vars
+        vars_ = self.vars_
+        kernel = self.kernel
+        maxndims = self.maxndims
+        kwargs = self.kwargs
+
+        for i in xrange(start, vlen, bsize):
+            # Get buffers for vars
+            for name in _vars.iterkeys():
+                var = _vars[name]
+                if hasattr(var, "__len__") and len(var) > bsize:
+                    if hasattr(var, "_getrange"):
+                        if i+bsize < vlen:
+                            var._getrange(i, bsize, vars_[name])
+                        else:
+                            vars_[name] = var[i:]
+                    else:
+                        vars_[name] = var[i:i+bsize]
+                else:
+                    if hasattr(var, "__getitem__"):
+                        vars_[name] = var[:]
+                    else:
+                        vars_[name] = var
+            # Perform the evaluation for this block
+            if kernel == "python":
+                res_block = _eval(expression, vars_)
+            else:
+                res_block = ca.numexpr.evaluate(expression, local_dict=vars_)
+            if i == start:
+                # Detection of reduction operations
+                if len(res_block.shape) < maxndims:
+                    raise (NotImplementedError,
+                           "reduction operations are not supported yet")
+                # Get a decent default for expectedlen
+                nrows = kwargs.pop('expectedlen', vlen)
+                result = ca.carray(res_block, expectedlen=nrows, **kwargs)
+            else:
+                result.append(res_block)
+
+        return result
 
 
 class cparams(object):
