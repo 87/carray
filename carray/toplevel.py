@@ -513,11 +513,8 @@ def _eval_blocks(expression, vars, vlen, typesize, kernel, **kwargs):
     # Threading code starts here...
     ca.set_nthreads(1)
     ca.blosc_set_nthreads(1)
-    # This threading code does not work very well, either for numexpr,
-    # but specially for the python kernel.  Would it be better to try
-    # Python3?  Until then, will only use 1 single thread.
     #nthreads = ca.ncores
-    nthreads = 1
+    nthreads = 2
 
     # Find a proper partition size for T0T0T0...T1T1T1...TNTNTN schema
     nblocks = (vlen // bsize)
@@ -548,7 +545,7 @@ class Worker(threading.Thread):
         vars_ = {}
         # Get temporaries for vars
         maxndims = 0
-        for name in _vars.iterkeys():
+        for name in _vars:
             var = _vars[name]
             if hasattr(var, "__len__"):
                 ndims = len(var.shape) + len(var.dtype.shape)
