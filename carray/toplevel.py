@@ -459,12 +459,15 @@ def eval(expression, kernel=None, **kwargs):
     vars = _getvars(expression, user_dict, depth, kernel=kernel)
 
     # Gather info about sizes and lengths
-    typesize, vlen = 0, 1
+    typesize, vlen, maxndims = 0, 1, 0
     for name in vars.iterkeys():
         var = vars[name]
         if hasattr(var, "__len__") and not hasattr(var, "dtype"):
             raise ValueError, "only numpy/carray sequences supported"
         if hasattr(var, "dtype"):  # numpy/carray arrays
+            ndims = len(var.shape) + len(var.dtype.shape)
+            if ndims > maxndims:
+                maxndims = ndims
             if isinstance(var, np.ndarray):  # numpy array
                 typesize += var.dtype.itemsize * np.prod(var.shape[1:])
             elif isinstance(var, ca.carray):  # carray array
@@ -483,10 +486,12 @@ def eval(expression, kernel=None, **kwargs):
         else:
             return ca.numexpr.evaluate(expression, local_dict=vars)
 
-    return _eval_blocks(expression, vars, vlen, typesize, kernel, **kwargs)
+    return _eval_blocks(expression, vars, vlen, typesize, kernel, maxndims,
+                        **kwargs)
 
 
-def _eval_blocks(expression, vars, vlen, typesize, kernel, **kwargs):
+def _eval_blocks(expression, vars, vlen, typesize, kernel, maxndims,
+                 **kwargs):
     """Perform the evaluation in blocks."""
 
     # Compute the optimal block size (in elements)
@@ -511,7 +516,7 @@ def _eval_blocks(expression, vars, vlen, typesize, kernel, **kwargs):
         bsize = 1
 
     # Threading code starts here...
-    ca.set_nthreads(1)
+    ca.set_nthreads(2)
     ca.blosc_set_nthreads(1)
     #nthreads = ca.ncores
     nthreads = 2
@@ -527,34 +532,31 @@ def _eval_blocks(expression, vars, vlen, typesize, kernel, **kwargs):
         start = tid * th_nblocks * bsize
         stop = (tid+1) * th_nblocks * bsize
         if tid == nthreads-1: stop = vlen
-        w = Worker(expression, start, stop, bsize, vars, kernel, **kwargs)
+        w = Worker(expression, start, stop, bsize, vars, kernel, maxndims,
+                   **kwargs)
         result = w.run()
 
     return result
 
 class Worker(threading.Thread):
-    def __init__(self, expression, start, vlen, bsize, _vars,
-                 kernel, **kwargs):
+    def __init__(self, expression, start, vlen, bsize, _vars, kernel,
+                 maxndims, **kwargs):
         self.expression = expression
         self.start = start
         self.vlen = vlen
         self.bsize = bsize
         self._vars = _vars
         self.kernel = kernel
+        self.maxndims = maxndims
         self.kwargs = kwargs
         vars_ = {}
         # Get temporaries for vars
-        maxndims = 0
         for name in _vars:
             var = _vars[name]
             if hasattr(var, "__len__"):
-                ndims = len(var.shape) + len(var.dtype.shape)
-                if ndims > maxndims:
-                    maxndims = ndims
                 if len(var) > bsize and hasattr(var, "_getrange"):
                     vars_[name] = np.empty(bsize, dtype=var.dtype)
         self.vars_ = vars_
-        self.maxndims = maxndims
 
 
     def run(self):
@@ -564,6 +566,7 @@ class Worker(threading.Thread):
         bsize = self.bsize
         _vars = self._vars
         vars_ = self.vars_
+        #vars_ = {}
         kernel = self.kernel
         maxndims = self.maxndims
         kwargs = self.kwargs
@@ -573,13 +576,13 @@ class Worker(threading.Thread):
             for name in _vars:
                 var = _vars[name]
                 if hasattr(var, "__len__") and len(var) > bsize:
-                    if hasattr(var, "_getrange"):
-                        if i+bsize < vlen:
-                            var._getrange(i, bsize, vars_[name])
-                        else:
-                            vars_[name] = var[i:]
-                    else:
-                        vars_[name] = var[i:i+bsize]
+                    # if hasattr(var, "_getrange"):
+                    #     if i+bsize < vlen:
+                    #         var._getrange(i, bsize, vars_[name])
+                    #     else:
+                    #         vars_[name] = var[i:]
+                    # else:
+                    vars_[name] = var[i:i+bsize]
                 else:
                     if hasattr(var, "__getitem__"):
                         vars_[name] = var[:]

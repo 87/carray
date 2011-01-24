@@ -946,6 +946,16 @@ cdef class carray:
 
     chunklen = self._chunklen
 
+    # Quick check for complete chunks special case
+    if type(key) is slice:
+      (start, stop, step) = key.start, key.stop, key.step
+      blen = stopb - startb
+      if (step == 1) and (startb % chunklen == 0) and (blen % chunklen == 0):
+        #print "startb-->", startb, blen
+        out = np.empty(blen, dtype=self.dtype)
+        self._getrange(startb, blen, out)
+        return out
+
     # Check for integer
     # isinstance(key, int) is not enough in Cython (?)
     if isinstance(key, (int, long)) or isinstance(key, np.int_):
