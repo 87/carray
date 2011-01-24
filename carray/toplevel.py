@@ -510,18 +510,6 @@ def _eval_blocks(expression, vars, vlen, typesize, kernel, **kwargs):
     if bsize == 0:
         bsize = 1
 
-    vars_ = {}
-    # Get temporaries for vars
-    maxndims = 0
-    for name in vars.iterkeys():
-        var = vars[name]
-        if hasattr(var, "__len__"):
-            ndims = len(var.shape) + len(var.dtype.shape)
-            if ndims > maxndims:
-                maxndims = ndims
-            if len(var) > bsize and hasattr(var, "_getrange"):
-                vars_[name] = np.empty(bsize, dtype=var.dtype)
-
     # Threading code starts here...
     ca.set_nthreads(1)
     ca.blosc_set_nthreads(1)
@@ -542,24 +530,35 @@ def _eval_blocks(expression, vars, vlen, typesize, kernel, **kwargs):
         start = tid * th_nblocks * bsize
         stop = (tid+1) * th_nblocks * bsize
         if tid == nthreads-1: stop = vlen
-        w = Worker(expression, start, stop, bsize, vars, vars_,
-                   kernel, maxndims, **kwargs)
+        w = Worker(expression, start, stop, bsize, vars, kernel, **kwargs)
         result = w.run()
 
     return result
 
 class Worker(threading.Thread):
-    def __init__(self, expression, start, vlen, bsize, _vars, vars_,
-                 kernel, maxndims, **kwargs):
+    def __init__(self, expression, start, vlen, bsize, _vars,
+                 kernel, **kwargs):
         self.expression = expression
         self.start = start
         self.vlen = vlen
         self.bsize = bsize
         self._vars = _vars
-        self.vars_ = vars_
         self.kernel = kernel
-        self.maxndims = maxndims
         self.kwargs = kwargs
+        vars_ = {}
+        # Get temporaries for vars
+        maxndims = 0
+        for name in _vars.iterkeys():
+            var = _vars[name]
+            if hasattr(var, "__len__"):
+                ndims = len(var.shape) + len(var.dtype.shape)
+                if ndims > maxndims:
+                    maxndims = ndims
+                if len(var) > bsize and hasattr(var, "_getrange"):
+                    vars_[name] = np.empty(bsize, dtype=var.dtype)
+        self.vars_ = vars_
+        self.maxndims = maxndims
+
 
     def run(self):
         expression = self.expression
@@ -574,7 +573,7 @@ class Worker(threading.Thread):
 
         for i in xrange(start, vlen, bsize):
             # Get buffers for vars
-            for name in _vars.iterkeys():
+            for name in _vars:
                 var = _vars[name]
                 if hasattr(var, "__len__") and len(var) > bsize:
                     if hasattr(var, "_getrange"):
